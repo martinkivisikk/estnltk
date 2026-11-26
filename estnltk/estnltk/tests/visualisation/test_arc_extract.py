@@ -1,0 +1,279 @@
+import pytest
+from estnltk import Layer
+from estnltk.tests.visualisation.arc_visualiser_helpers import add_relations, make_text
+
+from estnltk.visualisation.arc_visualiser.extract import ExtractionConfig, extract
+
+RAW = "Alar Karis kohtus eile Tallinnas Soome peaministriga. Ta naasis Tartusse."
+TREES = [
+    ([3, 1, 0, 3, 3, 7, 3, 3], "nsubj flat root advmod obl nmod obl punct".split()),
+    ([2, 0, 2, 2], "nsubj root obl punct".split()),
+]
+
+
+@pytest.fixture(scope="module")
+def text():
+    """Two sentences with morph_analysis and ner from EstNLTK."""
+    return make_text(RAW, TREES, extra_layers=("morph_analysis", "ner"))
+
+
+@pytest.fixture
+def plain():
+    return make_text(RAW, TREES)
+
+
+def models(text, sentence=None, highlight=None, **config):
+    return [
+        m for _, m in extract(text, ExtractionConfig(**config), sentence, highlight)
+    ]
+
+
+def test_all_sentences_with_restarting_ids(plain):
+    first, second = models(plain)
+    assert first.words[:3] == ("Alar", "Karis", "kohtus")
+    assert first.heads == (2, 0, None, 2, 2, 6, 2, 2)
+    assert second.words == ("Ta", "naasis", "Tartusse", ".")
+    assert second.heads == (1, None, 1, 1)
+    assert second.deprels == ("nsubj", "root", "obl", "punct")
+
+
+def test_non_default_layer_names():
+    text = make_text(RAW, TREES, layer="v172_stanza_syntax")
+    (model,) = models(text, sentence=1, syntax_layer="v172_stanza_syntax")
+    assert model.words == ("Ta", "naasis", "Tartusse", ".")
+
+
+def test_sentence_index_negative(plain):
+    (model,) = models(plain, sentence=-1)
+    assert model.words[0] == "Ta"
+
+
+def test_missing_layers_and_attributes(plain):
+    with pytest.raises(ValueError, match="'other_syntax' is missing"):
+        models(plain, syntax_layer="other_syntax")
+    with pytest.raises(ValueError, match="Sentence layer"):
+        models(plain, sentence_layer="v1_sentences")
+    with pytest.raises(ValueError, match="Row layer"):
+        models(plain, rows=(("morph_analysis", "partofspeech"),))
+    with pytest.raises(ValueError, match="lacks the attribute"):
+        models(plain, syntax_layer="words")
+    with pytest.raises(ValueError, match="out of range"):
+        models(plain, sentence=2)
+
+
+def test_head_outside_sentence():
+    text = make_text("Ta laulab.", [([2, 0, 9], ["nsubj", "root", "punct"])])
+    with pytest.raises(ValueError, match="head 9"):
+        models(text)
+
+
+def test_rows_from_ambiguous_layer(text):
+    rows = (("morph_analysis", "partofspeech"), ("morph_analysis", "form"))
+    (first,) = models(text, sentence=0, rows=rows)
+    assert [r.label for r in first.rows] == ["partofspeech", "form"]
+    assert first.rows[0].values[:3] == ("H", "H", "V")
+
+
+def test_ambiguous_first_or_all(plain):
+    layer = Layer(
+        "amb",
+        attributes=("pos", "form"),
+        text_object=plain,
+        parent="words",
+        ambiguous=True,
+    )
+    word = plain.words[0].base_span
+    layer.add_annotation(word, pos="S", form="sg n")
+    layer.add_annotation(word, pos="V", form="sg n")
+    layer.add_annotation(word, pos="S", form="pl n")
+    plain.add_layer(layer)
+    rows = (("amb", "pos"), ("amb", "form"))
+    (first,) = models(plain, sentence=0, rows=rows)
+    assert [r.values[0] for r in first.rows] == ["S", "sg n"]
+    # "all" joins the distinct values in annotation order
+    (every,) = models(plain, sentence=0, rows=rows, ambiguous="all")
+    assert [r.values[0] for r in every.rows] == ["S|V", "sg n|pl n"]
+
+
+def test_rows_from_functions_and_syntax_layer(plain):
+    def length(span):
+        return len(span.text)
+
+    rows = (length, ("upper", lambda s: s.text.upper()), ("stanza_syntax", "id"))
+    (model,) = models(plain, sentence=1, rows=rows)
+    assert model.rows[0].label == "length"
+    assert model.rows[0].values == ("2", "6", "8", "1")
+    assert model.rows[1].values == ("TA", "NAASIS", "TARTUSSE", ".")
+    assert model.rows[2].values == ("1", "2", "3", "4")
+
+
+def test_row_missing_values(plain):
+    layer = Layer("extra", attributes=("tag",), text_object=plain, parent="words")
+    layer.add_annotation(plain.words[0].base_span, tag="X")
+    layer.add_annotation(plain.words[1].base_span, tag=None)
+    plain.add_layer(layer)
+    (model,) = models(plain, sentence=0, rows=(("extra", "tag"),), missing="?")
+    assert model.rows[0].values[:3] == ("X", "?", "?")
+
+
+def test_invalid_row_spec(plain):
+    with pytest.raises(ValueError, match="a row must be"):
+        models(plain, rows=("morph_analysis",))
+
+
+def test_boxes_from_overlay_layer(text):
+    first, second = models(text, overlay_layer="ner", overlay_label="nertag")
+    labels = {(b.start, b.end): b.label for b in first.boxes}
+    assert labels[(0, 2)] == "PER"
+    assert labels[(4, 5)] == "LOC"
+    assert [(b.start, b.end, b.label) for b in second.boxes] == [(2, 3, "LOC")]
+    (unlabelled,) = models(text, sentence=0, overlay_layer="ner")
+    assert {b.label for b in unlabelled.boxes} == {""}
+
+
+@pytest.mark.parametrize("ambiguous", ["first", "all"])
+def test_ambiguous_overlay_label_shows_all_values(plain, ambiguous):
+    layer = Layer("amb_ner", attributes=("tag",), text_object=plain, ambiguous=True)
+    name = plain.words[0:2]
+    layer.add_annotation((name[0].start, name[1].end), tag="PER")
+    layer.add_annotation((name[0].start, name[1].end), tag="ORG")
+    layer.add_annotation((name[0].start, name[1].end), tag="PER")
+    plain.add_layer(layer)
+    (model,) = models(
+        plain,
+        sentence=0,
+        overlay_layer="amb_ner",
+        overlay_label="tag",
+        ambiguous=ambiguous,
+    )
+    assert [(b.start, b.end, b.label) for b in model.boxes] == [(0, 2, "PER|ORG")]
+
+
+@pytest.fixture
+def relations(plain):
+    add_relations(
+        plain,
+        "roles",
+        ["subject", "object", "antecedent"],
+        [
+            {"subject": "Alar Karis", "object": "Soome peaministriga", "rel": "meet"},
+            {"subject": ("Ta", 1), "object": "Tartusse", "rel": ["return", "go"]},
+            {"subject": ("Ta", 1), "antecedent": "Alar Karis"},  # across sentences
+        ],
+        attributes=("rel",),
+        ambiguous=True,
+    )
+    return plain
+
+
+def test_boxes_from_relation_layer(relations):
+    first, second = models(relations, overlay_layer="roles")
+    boxes = lambda m: {(b.start, b.end, b.label, b.relation) for b in m.boxes}  # noqa: E731
+    # one box per filled named span; the index is the relation's index in the layer
+    assert boxes(first) == {
+        (0, 2, "subject (0)", 0),
+        (5, 7, "object (0)", 0),
+        (0, 2, "antecedent (2)", 2),
+    }
+    assert boxes(second) == {
+        (0, 1, "subject (1)", 1),
+        (2, 3, "object (1)", 1),
+        (0, 1, "subject (2)", 2),
+    }
+    assert {b.lines for b in first.boxes} == {
+        ("subject (0)",),
+        ("object (0)",),
+        ("antecedent (2)",),
+    }
+
+
+def test_relation_overlay_label(relations):
+    first, second = models(relations, overlay_layer="roles", overlay_label="rel")
+    by_label = {b.label: b.lines for m in (first, second) for b in m.boxes}
+    assert by_label["subject (0)"] == ("subject (0)", "meet")
+    # ambiguous relation: all distinct values, whatever `ambiguous` is
+    assert by_label["object (1)"] == ("object (1)", "return|go")
+    assert by_label["subject (2)"] == ("subject (2)", "-")  # no value: `missing`
+    with pytest.raises(ValueError, match="has no attribute 'nope' .attributes: rel"):
+        models(relations, overlay_layer="roles", overlay_label="nope")
+
+
+def test_highlight_span_finds_sentence(text):
+    ((k, model),) = extract(text, ExtractionConfig(), highlight=text.ner[0])
+    assert k == 0
+    assert model.highlight == {0, 1}
+    ((k, model),) = extract(text, ExtractionConfig(), highlight=text.ner[-1])
+    assert (k, model.highlight) == (1, {2})
+
+
+def test_highlight_spans_and_indices(text):
+    words = list(text.words)
+    (model,) = models(text, highlight=[words[0], words[2]])
+    assert model.highlight == {0, 2}
+    (model,) = models(text, highlight=text.words[9:11])  # a slice of a layer
+    assert model.highlight == {1, 2}
+    (model,) = models(text, sentence=1, highlight=[0, 3])
+    assert model.highlight == {0, 3}
+
+
+def test_highlight_errors(text):
+    with pytest.raises(ValueError, match="give `sentence`"):
+        models(text, highlight=[0])
+    with pytest.raises(ValueError, match="0..3"):
+        models(text, sentence=1, highlight=[4])
+    with pytest.raises(ValueError, match="single sentence"):
+        models(text, highlight=text.words[6:9])
+    with pytest.raises(ValueError, match="not in 0"):
+        models(text, sentence=0, highlight=text.ner[-1])
+    with pytest.raises(ValueError, match="empty"):
+        models(text, highlight=[])
+
+
+def test_highlight_from_another_text(plain):
+    # Same character positions as `plain`, but a different Text: matching by
+    # position alone would silently highlight "Alar Karis" of `plain`
+    other = make_text(RAW.replace("Alar Karis", "Mari Tamm "), TREES)
+    with pytest.raises(ValueError, match="not from the drawn Text"):
+        models(plain, highlight=other.words[0:2])
+    with pytest.raises(ValueError, match="not from the drawn Text"):
+        models(plain, highlight=[plain.words[0], other.words[1]])
+
+
+@pytest.fixture(params=["enveloping", "word-level"])
+def spans_layer_text(request):
+    """A layer named `spans` must not break span highlights.
+
+    EstNLTK resolves unknown span attributes to layers of the same name, so a
+    `getattr(span, "spans")` check picks up this layer. The layer covers
+    "Karis kohtus" (enveloping) or "Karis" (word-level), so highlighted words
+    lie inside it.
+    """
+    text = make_text(RAW, TREES)
+    if request.param == "enveloping":
+        layer = Layer(
+            "spans", attributes=("label",), text_object=text, enveloping="words"
+        )
+        layer.add_annotation(text.words[1:3], label="X")
+    else:
+        layer = Layer("spans", attributes=("label",), text_object=text, parent="words")
+        layer.add_annotation(text.words[1], label="X")
+    text.add_layer(layer)
+    return text
+
+
+@pytest.mark.parametrize(
+    ("highlight", "expected"),
+    [
+        (lambda t: t.words[1], {1}),
+        (lambda t: t.words[0:2], {0, 1}),
+        (lambda t: t.spans[0], None),  # the words of the `spans` layer's span
+        (lambda t: t.stanza_syntax[1], {1}),
+    ],
+    ids=["word", "words-slice", "spans-span", "syntax-span"],
+)
+def test_highlight_with_layer_named_spans(spans_layer_text, highlight, expected):
+    text = spans_layer_text
+    if expected is None:
+        expected = {1, 2} if text["spans"].enveloping else {1}
+    (model,) = models(text, highlight=highlight(text))
+    assert model.highlight == expected

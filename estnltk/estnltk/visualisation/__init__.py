@@ -1,3 +1,5 @@
 from estnltk.visualisation.mappers.value_mapper import value_mapper_unique
 from estnltk.visualisation.span_visualiser.fancy_span_visualisation import DisplaySpans
 from estnltk.visualisation.span_visualiser.named_span_visualisation import DisplayNamedSpans
+from estnltk.visualisation.arc_visualiser.visualiser import DependencyTreeVisualiser
+from estnltk.visualisation.arc_visualiser.relation_arc_visualiser import RelationArcVisualiser
