@@ -2,7 +2,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from estnltk.tests.visualisation.arc_visualiser_helpers import make
+from estnltk.tests.visualisation.arc_visualisation.arc_visualiser_helpers import make
 
 from estnltk.visualisation.arc_visualiser import Box, Row, render_svg
 

@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 from estnltk import Text
-from estnltk.tests.visualisation.arc_visualiser_helpers import add_relations, find, make_text
+from estnltk.tests.visualisation.arc_visualisation.arc_visualiser_helpers import add_relations, find, make_text
 
 import estnltk.visualisation.arc_visualiser.relation_arc_visualiser as relation_arc_visualiser_module
 from estnltk.visualisation.arc_visualiser import RelationArcVisualiser

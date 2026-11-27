@@ -3,7 +3,7 @@ import re
 import xml.etree.ElementTree as ET
 
 import pytest
-from estnltk.tests.visualisation.arc_visualiser_helpers import add_relations, make_text
+from estnltk.tests.visualisation.arc_visualisation.arc_visualiser_helpers import add_relations, make_text
 
 import estnltk.visualisation.arc_visualiser.visualiser as visualiser_module
 from estnltk.visualisation.arc_visualiser import DependencyTreeVisualiser

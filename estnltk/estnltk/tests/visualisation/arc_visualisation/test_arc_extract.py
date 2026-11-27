@@ -1,6 +1,6 @@
 import pytest
 from estnltk import Layer
-from estnltk.tests.visualisation.arc_visualiser_helpers import add_relations, make_text
+from estnltk.tests.visualisation.arc_visualisation.arc_visualiser_helpers import add_relations, make_text
 
 from estnltk.visualisation.arc_visualiser.extract import ExtractionConfig, extract
 
